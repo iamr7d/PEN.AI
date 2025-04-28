@@ -1,0 +1,7 @@
+# One prompt per line for image generation
+# Example:
+A futuristic city skyline at sunset with flying cars
+A breaking news scene with journalists and cameras
+A robot reading a newspaper in a coffee shop
+A peaceful park with people using technology
+A dramatic courtroom illustration for a legal news story
