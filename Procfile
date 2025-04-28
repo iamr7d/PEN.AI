@@ -1,1 +1,1 @@
-web: python aggregate_news.py
+web: python3 aggregate_news.py
