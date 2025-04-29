@@ -7,14 +7,36 @@ import subprocess
 app = Flask(__name__)
 CORS(app)
 
-NEWS_JSON_PATH = os.path.join(os.path.dirname(__file__), '../enhanced_news.json')
-IMAGES_DIR = os.path.join(os.path.dirname(__file__), '../images')
+NEWS_BUCKET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../news bucket'))
+IMAGES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../images'))
+DEFAULT_IMAGE = os.path.join(IMAGES_DIR, 'default.png')
+
+@app.route('/images/<path:filename>')
+def serve_image(filename):
+    import os
+    image_path = os.path.join(IMAGES_DIR, filename)
+    if os.path.isfile(image_path):
+        return send_from_directory(IMAGES_DIR, filename)
+    else:
+        # Serve default image if requested file is missing
+        return send_from_directory(IMAGES_DIR, 'default.png')
 
 @app.route('/api/news', methods=['GET'])
 def get_news():
     try:
-        with open(NEWS_JSON_PATH, 'r', encoding='utf-8') as f:
-            news = json.load(f)
+        # Aggregate all news from all .json files in NEWS_BUCKET_DIR
+        news = []
+        import glob
+        for file in glob.glob(os.path.join(NEWS_BUCKET_DIR, '*.json')):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        news.extend(data)
+                    elif isinstance(data, dict):
+                        news.append(data)
+            except Exception as e:
+                continue  # Skip bad files
         # Enhance news items with tags and category if missing
         import re
         def clean_text(text):
@@ -79,19 +101,40 @@ def get_news():
                 item['seo_headline'] = clean_text(item['seo_headline'])
             if item.get('rewritten_summary'):
                 item['rewritten_summary'] = clean_text(item['rewritten_summary'])
-            # Tags
-            if not item.get('tags'):
+            # Tags: always a list of strings, no weird objects
+            if not item.get('tags') or not isinstance(item['tags'], (list, str)):
                 item['tags'] = infer_tags(item)
-            # Always clean tags
             item['tags'] = clean_tags(item['tags'])
-            # Category and subcategory
-            if not item.get('category') or not item.get('subcategory'):
-                cat, subcat = infer_category_and_subcategory(item)
-                item['category'] = cat
-                item['subcategory'] = subcat
+            # Remove any non-string tags
+            item['tags'] = [t for t in item['tags'] if isinstance(t, str)]
+            # Category and subcategory: always capitalized
+            cat, subcat = infer_category_and_subcategory(item)
+            item['category'] = cat
+            item['subcategory'] = subcat
             # Date published (try to infer or set default)
             if not item.get('date_published'):
                 item['date_published'] = item.get('date') or item.get('pubDate') or ''
+            # Image: only filename, not path, and must exist in images bucket/general
+            image_filename = os.path.basename(item.get('image', '').strip()) if item.get('image') else ''
+            image_path = os.path.join(IMAGES_DIR, image_filename) if image_filename else ''
+            # If explicit image field and file exists, use it
+            if image_filename and os.path.isfile(image_path):
+                item['image'] = image_filename
+            else:
+                # Try to find an image by UUID (news_id)
+                news_id = item.get('news_id', '').strip()
+                found_image = ''
+                for ext in ['.jpg', '.jpeg', '.png']:
+                    candidate = f"{news_id}{ext}"
+                    candidate_path = os.path.join(IMAGES_DIR, candidate)
+                    if news_id and os.path.isfile(candidate_path):
+                        found_image = candidate
+                        break
+                item['image'] = found_image  # Only set if real file exists, else ''
+            # Ensure required fields exist
+            for key in ['news_id','heading','summary','link','category','date_published','image']:
+                if key not in item:
+                    item[key] = ''
         return jsonify(news)
 
 
@@ -101,8 +144,19 @@ def get_news():
 @app.route('/api/news/<news_id>', methods=['GET'])
 def get_news_item(news_id):
     try:
-        with open(NEWS_JSON_PATH, 'r', encoding='utf-8') as f:
-            news = json.load(f)
+        # Aggregate all news from all .json files in NEWS_BUCKET_DIR
+        news = []
+        import glob
+        for file in glob.glob(os.path.join(NEWS_BUCKET_DIR, '*.json')):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        news.extend(data)
+                    elif isinstance(data, dict):
+                        news.append(data)
+            except Exception:
+                continue
         for item in news:
             if str(item.get('news_id')) == str(news_id):
                 return jsonify(item)

@@ -5,7 +5,6 @@ GoogleNews
 beautifulsoup4
 lxml
 pandas
-transformers
 lxml_html_clean
 cssselect
 pillow
@@ -17,5 +16,4 @@ tinysegmenter
 tzdata
 tzlocal
 google-generativeai
-torch
 python-dotenv

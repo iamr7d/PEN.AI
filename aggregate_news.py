@@ -9,13 +9,6 @@ import logging
 import argparse
 from unique_id_util import generate_unique_id
 
-# Optional: AI summarization
-try:
-    from transformers import pipeline
-    summarizer = pipeline('summarization', model='facebook/bart-large-cnn')
-except ImportError:
-    summarizer = None
-    print("[INFO] transformers not installed. AI summarization is disabled.")
 
 # --- LEGAL & ETHICAL SAFEGUARDS ---
 DISCLAIMER = (
@@ -104,7 +97,7 @@ def fetch_google_news(topic='technology', max_results=5):
         logging.error(f"GoogleNews error: {e}")
     return news_list
 
-def enrich_with_article_text(news_list, summarizer=None):
+def enrich_with_article_text(news_list):
     for news in news_list:
         link = news.get('link', '')
         if link and can_fetch(link):
@@ -113,32 +106,48 @@ def enrich_with_article_text(news_list, summarizer=None):
                 article.download()
                 article.parse()
                 news['full_text'] = article.text
-                # AI summarization if available
-                if summarizer and article.text:
-                    try:
-                        ai_summary = summarizer(article.text[:1024], max_length=60, min_length=20, do_sample=False)[0]['summary_text']
-                        news['ai_summary'] = ai_summary
-                    except Exception as e:
-                        news['ai_summary'] = ''
-                        logging.warning(f"Summarization failed: {e}")
-                    time.sleep(1)  # avoid rate limits on HuggingFace pipeline
+                if not news['full_text']:
+                    logging.warning(f"[aggregate_news] Empty article text for {link}")
             except Exception as e:
                 news['full_text'] = ''
-                news['ai_summary'] = ''
                 logging.warning(f"Article extraction failed for {link}: {e}")
         else:
             news['full_text'] = ''
-            news['ai_summary'] = ''
     return news_list
 
 def save_news(news_list, json_path='all_news.json', csv_path='all_news.csv'):
+    import os
+    import json
+    import pandas as pd
+    # Load existing news if present
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                existing_news = json.load(f)
+        except Exception:
+            existing_news = []
+    else:
+        existing_news = []
+    # Merge and deduplicate by news_id
+    all_news = {item['news_id']: item for item in existing_news if 'news_id' in item}
+    for item in news_list:
+        if 'news_id' in item:
+            all_news[item['news_id']] = item
+    merged_news = list(all_news.values())
+    # Save merged news
     with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(news_list, f, ensure_ascii=False, indent=2)
-    pd.DataFrame(news_list).to_csv(csv_path, index=False, encoding='utf-8')
-    logging.info(f"Aggregated {len(news_list)} news articles from multiple sources. Saved to {json_path} and {csv_path}.")
+        json.dump(merged_news, f, ensure_ascii=False, indent=2)
+    pd.DataFrame(merged_news).to_csv(csv_path, index=False, encoding='utf-8')
+    logging.info(f"Aggregated {len(news_list)} new articles, {len(merged_news)} total. Saved to {json_path} and {csv_path}.")
 
 def main():
     setup_logging()
+    # Load .env if present
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    default_gemini_key = os.getenv('GEMINI_KEY') or os.getenv('GEMINI_API_KEY')
+    default_unsplash_key = os.getenv('UNSPLASH_KEY') or os.getenv('UNSPLASH_ACCESS_KEY')
     parser = argparse.ArgumentParser(description='Aggregate news from RSS and Google News.')
     parser.add_argument('--rss', nargs='+', default=[
         'http://feeds.bbci.co.uk/news/rss.xml',
@@ -149,7 +158,21 @@ def main():
     parser.add_argument('--max_google', type=int, default=5, help='Max Google News articles')
     parser.add_argument('--json_path', default='all_news.json', help='Output JSON path')
     parser.add_argument('--csv_path', default='all_news.csv', help='Output CSV path')
+    parser.add_argument('--gemini_enhance', action='store_true', help='Run Gemini enhancer on each category after aggregation')
+    parser.add_argument('--gemini_key', type=str, default=default_gemini_key, help='Gemini API key (optional)')
+    parser.add_argument('--unsplash_key', type=str, default=default_unsplash_key, help='Unsplash API key (optional)')
     args = parser.parse_args()
+
+    # Fetch news
+    rss_news = fetch_rss_news(args.rss, args.max_per_feed)
+    google_news = fetch_google_news(args.topic, args.max_google)
+    all_news = rss_news + google_news
+    all_news = enrich_with_article_text(all_news)
+
+    # Force output to all_news.json and all_news.csv at project root
+    json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'all_news.json'))
+    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'all_news.csv'))
+    save_news(all_news, json_path=json_path, csv_path=csv_path)
 
     rss_news = fetch_rss_news(args.rss, args.max_per_feed, default_category=args.topic)
     google_news = fetch_google_news(args.topic, args.max_google)
@@ -158,16 +181,15 @@ def main():
     # Process and save each news item one by one
     import os
     import csv
-    # Group news by category
     from collections import defaultdict
+    import re
+    import subprocess
     category_dict = defaultdict(list)
     for news in all_news:
-        enriched = enrich_with_article_text([news], summarizer)[0]
+        enriched = enrich_with_article_text([news])[0]
         category = enriched.get('category', 'general')
         category_dict[category].append(enriched)
 
-    # Write separate files for each category
-    import re
     # Create 'news bucket' directory if it doesn't exist
     bucket_dir = os.path.join(os.getcwd(), 'news bucket')
     if not os.path.exists(bucket_dir):
@@ -177,22 +199,24 @@ def main():
         safe_category = re.sub(r'[^A-Za-z0-9_\-]', '_', category.lower())
         json_path = os.path.join(bucket_dir, f'news_{safe_category}.json')
         csv_path = os.path.join(bucket_dir, f'news_{safe_category}.csv')
-        # Write JSON as array (always a list)
-        with open(json_path, 'w', encoding='utf-8') as f_json:
-            f_json.write('[\n')
-            for i, item in enumerate(items):
-                json.dump(item, f_json, ensure_ascii=False, indent=2)
-                if i < len(items) - 1:
-                    f_json.write(',\n')
-            f_json.write('\n]')
-        # Write CSV
-        if items:
-            with open(csv_path, 'w', newline='', encoding='utf-8') as f_csv:
-                writer = csv.DictWriter(f_csv, fieldnames=items[0].keys())
-                writer.writeheader()
-                for item in items:
-                    writer.writerow(item)
-        logging.info(f"Saved {len(items)} articles to {json_path} and {csv_path}")
+        save_news(items, json_path, csv_path)
+        # Optionally run Gemini enhancer
+        if args.gemini_enhance:
+            gemini_args = [
+                'python', 'gemini_news_enhancer.py',
+                '--news_json', json_path,
+                '--output_json', os.path.join(bucket_dir, f'news_{safe_category}_gemini.json'),
+                '--output_csv', os.path.join(bucket_dir, f'news_{safe_category}_gemini.csv')
+            ]
+            if args.gemini_key:
+                gemini_args += ['--gemini_key', args.gemini_key]
+            if args.unsplash_key:
+                gemini_args += ['--unsplash_key', args.unsplash_key]
+            logging.info(f"Running Gemini enhancer for {json_path} ...")
+            try:
+                subprocess.run(gemini_args, check=True)
+            except Exception as e:
+                logging.error(f"Gemini enhancer failed for {json_path}: {e}")
 
 if __name__ == "__main__":
     main()

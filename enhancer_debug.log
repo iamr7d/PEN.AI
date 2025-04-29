@@ -1,0 +1,7 @@
+[Gemini] Using model: gemini-2.0-flash
+2025-04-29 16:11:40,731 - INFO - AFC is enabled with max remote calls: 10.
+2025-04-29 16:11:48,131 - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent "HTTP/1.1 503 Service Unavailable"
+2025-04-29 16:12:18,133 - INFO - AFC is enabled with max remote calls: 10.
+2025-04-29 16:12:31,295 - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent "HTTP/1.1 503 Service Unavailable"
+2025-04-29 16:13:01,305 - INFO - AFC is enabled with max remote calls: 10.
+2025-04-29 16:13:07,979 - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent "HTTP/1.1 503 Service Unavailable"
